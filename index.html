@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Гео-статистика</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px;
+    background: #0f1115;
+    color: #e6e6e6;
+    min-height: 100vh;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 4px; }
+  .sub { color: #888; margin-top: 0; font-size: 0.9rem; }
+  .card {
+    background: #1a1d24;
+    padding: 20px;
+    border-radius: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    margin-bottom: 16px;
+    border: 1px solid #262a33;
+  }
+  button {
+    padding: 12px 20px;
+    font-size: 1rem;
+    border-radius: 10px;
+    border: none;
+    background: #3b82f6;
+    color: white;
+    cursor: pointer;
+    transition: background .15s;
+    font-weight: 600;
+  }
+  button:hover:not(:disabled) { background: #2563eb; }
+  button:disabled { background: #444; cursor: default; }
+  .status { margin-top: 12px; font-weight: 600; }
+  .ok { color: #22c55e; }
+  .err { color: #ef4444; }
+  .muted { color: #888; font-size: 0.85rem; }
+  .coord {
+    font-family: ui-monospace, monospace;
+    font-size: 1.3rem;
+    color: #60a5fa;
+    margin: 8px 0;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.9rem; }
+  .grid div { padding: 8px; background: #12151b; border-radius: 8px; }
+  .grid span { color: #888; display: block; font-size: 0.75rem; }
+  #map { height: 320px; border-radius: 12px; margin-top: 12px; display: none; }
+  .stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    background: #12151b;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+  }
+  .stats-row .coords { font-family: ui-monospace, monospace; color: #60a5fa; }
+  .stats-row .time { color: #888; font-size: 0.75rem; }
+  .empty { color: #666; text-align: center; padding: 20px; }
+  a { color: #60a5fa; }
+</style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+</head>
+<body>
+
+<h1>🌍 Гео-статистика</h1>
+<p class="sub">Статический сайт на GitHub Pages. Данные хранятся локально в браузере (localStorage).</p>
+
+<div class="card">
+  <p style="margin-top:0">Нажмите кнопку, чтобы определить свою геопозицию и добавить её в статистику.</p>
+  <button id="btn">📍 Определить геопозицию</button>
+  <p id="status" class="status muted"></p>
+</div>
+
+<div class="card" id="result" style="display:none">
+  <p style="margin:0">Ваши координаты:</p>
+  <p class="coord" id="coords"></p>
+  <div class="grid">
+    <div><span>Точность</span><b id="acc">—</b></div>
+    <div><span>Язык</span><b id="lang">—</b></div>
+    <div><span>Экран</span><b id="screen">—</b></div>
+    <div><span>Платформа</span><b id="platform">—</b></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <h2 style="margin:0; font-size:1.1rem;">📊 Собранная статистика (<span id="count">0</span>)</h2>
+    <button id="clear" style="background:#3a1f1f; color:#ef4444; padding:6px 12px; font-size:0.85rem;">Очистить</button>
+  </div>
+  <div id="statsList"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const STORAGE_KEY = 'geo_stats_visits';
+
+const btn = document.getElementById('btn');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const coordsEl = document.getElementById('coords');
+const accEl = document.getElementById('acc');
+const langEl = document.getElementById('lang');
+const screenEl = document.getElementById('screen');
+const platformEl = document.getElementById('platform');
+const statsList = document.getElementById('statsList');
+const countEl = document.getElementById('count');
+const clearBtn = document.getElementById('clear');
+
+let map = null;
+let marker = null;
+
+// ---------- Хранилище ----------
+function loadVisits() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+  } catch { return []; }
+}
+function saveVisits(visits) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(visits));
+}
+
+// ---------- Отрисовка списка ----------
+function renderStats() {
+  const visits = loadVisits();
+  countEl.textContent = visits.length;
+
+  if (visits.length === 0) {
+    statsList.innerHTML = '<div class="empty">Пока нет записей</div>';
+    return;
+  }
+
+  statsList.innerHTML = visits
+    .slice()
+    .reverse()
+    .slice(0, 30)
+    .map(v => `
+      <div class="stats-row">
+        <div>
+          <div class="coords">${v.lat.toFixed(5)}, ${v.lon.toFixed(5)}</div>
+          <div class="time">${new Date(v.timestamp).toLocaleString('ru-RU')} · ±${Math.round(v.accuracy)}м</div>
+        </div>
+        <a href="https://www.openstreetmap.org/?mlat=${v.lat}&mlon=${v.lon}#map=16/${v.lat}/${v.lon}" target="_blank" rel="noopener">Карта ↗</a>
+      </div>
+    `)
+    .join('');
+}
+
+// ---------- Карта ----------
+function initMap(lat, lon) {
+  document.getElementById('map').style.display = 'block';
+
+  if (!map) {
+    map = L.map('map').setView([lat, lon], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+  } else {
+    map.setView([lat, lon], 15);
+  }
+
+  if (marker) map.removeLayer(marker);
+  marker = L.marker([lat, lon]).addTo(map).bindPopup('Вы здесь').openPopup();
+}
+
+// ---------- Определение геопозиции ----------
+btn.addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    statusEl.textContent = '❌ Геолокация не поддерживается';
+    statusEl.className = 'status err';
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = '⏳ Запрашиваем разрешение...';
+  statusEl.className = 'status';
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+
+      coordsEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+      accEl.textContent = `±${Math.round(accuracy)} м`;
+      langEl.textContent = navigator.language;
+      screenEl.textContent = `${screen.width}×${screen.height}`;
+      platformEl.textContent = navigator.platform || '—';
+      resultEl.style.display = 'block';
+
+      initMap(lat, lon);
+
+      const visits = loadVisits();
+      visits.push({
+        lat, lon, accuracy,
+        ua: navigator.userAgent,
+        screen: `${screen.width}x${screen.height}`,
+        lang: navigator.language,
+        timestamp: new Date().toISOString()
+      });
+      saveVisits(visits);
+      renderStats();
+
+      statusEl.textContent = '✅ Геопозиция сохранена в статистику';
+      statusEl.className = 'status ok';
+      btn.disabled = false;
+    },
+    (err) => {
+      const messages = {
+        1: '❌ Доступ к геолокации запрещён',
+        2: '❌ Позиция недоступна',
+        3: '❌ Превышено время ожидания'
+      };
+      statusEl.textContent = messages[err.code] || '❌ Ошибка';
+      statusEl.className = 'status err';
+      btn.disabled = false;
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+});
+
+// ---------- Очистка ----------
+clearBtn.addEventListener('click', () => {
+  if (confirm('Удалить всю статистику?')) {
+    localStorage.removeItem(STORAGE_KEY);
+    renderStats();
+  }
+});
+
+// ---------- Инициализация ----------
+renderStats();
+</script>
+
+</body>
+</html>
